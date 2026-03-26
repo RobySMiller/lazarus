@@ -2,37 +2,46 @@
 
 > Your service, risen.
 
-Lightweight heartbeat failover for hybrid local/cloud operation.
+**Your AI never sleeps, even when your laptop does.**
 
-Run your service locally. If it goes offline, a cloud standby takes over automatically. When it comes back — it reclaims control. Like a deadman's switch for uptime.
+Close your laptop, lose WiFi, or let your Mac sleep — your AI agent, bot, or service keeps running. Lazarus is a lightweight heartbeat failover that keeps a cloud standby ready. When your local machine goes dark, the cloud takes over in 30 seconds. When you come back, it yields. Seamlessly.
+
+Born from running AI agents locally. We got tired of our assistant going offline every time we closed a lid.
 
 ```
-Local Machine (primary)              Cloud (standby)
+Your Laptop (primary)                Cloud (standby)
 ┌─────────────────────┐              ┌─────────────────────┐
 │                     │  heartbeat   │                     │
-│   Your Service      │──every 10s──▶│   Lazarus standby   │
-│   + Lazarus primary │              │   (service stopped) │
+│   Your AI agent     │──every 10s──▶│   Lazarus standby   │
+│   + Lazarus primary │              │   (idle, $0 compute)│
 │                     │              │                     │
 └─────────────────────┘              └─────────────────────┘
 
-        ✕ goes offline                 30s, no heartbeat...
+        💤 laptop sleeps              30s, no heartbeat...
 
                                      ┌─────────────────────┐
                                      │                     │
                                      │   LAZARUS RISES     │
-                                     │   Service started   │
+                                     │   Agent takes over  │
                                      │                     │
                                      └─────────────────────┘
 
-        ✓ comes back online
+        ☀️ laptop wakes up
 
 ┌─────────────────────┐              ┌─────────────────────┐
 │                     │  heartbeat   │                     │
-│   Your Service      │──resumes───▶│   Yields back       │
-│   reclaims control  │              │   Service stopped   │
+│   Your AI agent     │──resumes───▶│   Yields back       │
+│   reclaims control  │              │   (idle again)      │
 │                     │              │                     │
 └─────────────────────┘              └─────────────────────┘
 ```
+
+## Use cases
+
+- **AI agents** — Run your Claude, GPT, or custom agent locally. Lazarus keeps it alive in the cloud when your machine sleeps.
+- **Bots** — Slack bots, Discord bots, Telegram bots — run them on your hardware, fail over to the cloud.
+- **Dev servers** — Keep a preview environment alive even when your laptop is closed.
+- **Any long-running process** — Anything you want to run locally-first with cloud backup.
 
 ## Quick Start
 
@@ -44,23 +53,34 @@ npm i -g lazarus-failover
 ```bash
 lazarus primary \
   --target https://your-cloud-standby.example.com:8089 \
-  --command "node server.js"
+  --command "node my-agent.js"
 ```
 
 **On your cloud instance (standby):**
 ```bash
 lazarus standby \
   --port 8089 \
-  --command "node server.js"
+  --command "node my-agent.js"
 ```
 
 That's it. If your machine goes offline for 30 seconds, the cloud starts your service. When you come back, it stops.
 
 ## Why
 
-You want to run things locally — it's faster, cheaper, and yours. But laptops sleep, power goes out, and WiFi drops. Existing HA tools (Keepalived, Pacemaker, Consul) are built for data centers, not for "my Mac Mini runs my bot and I want Railway as a backup."
+You want to run things locally — it's faster, cheaper, and yours. But laptops sleep, power goes out, and WiFi drops.
+
+Existing HA tools (Keepalived, Pacemaker, Consul) are built for data centers, not for "my Mac runs my AI agent and I want Railway as a backup."
 
 Lazarus is one thing done well: heartbeat-based failover in ~400 lines of TypeScript.
+
+## How it works
+
+1. **Primary** sends an HTTP heartbeat to the standby every 10 seconds
+2. **Standby** listens. As long as heartbeats arrive, it stays idle
+3. If **30 seconds** pass with no heartbeat, the standby starts your service
+4. When the primary comes back and heartbeats resume, the standby stops the service and yields
+
+No leader election. No consensus protocol. No distributed state. Just a deadman's switch.
 
 ## Configuration
 
@@ -181,12 +201,11 @@ curl https://standby.example.com:8089/health
 }
 ```
 
-## Provider examples
+## Deploy the standby anywhere
 
 ### Railway
 
 ```bash
-# In your Railway service
 lazarus standby --port $PORT --command "node server.js"
 ```
 
