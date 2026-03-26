@@ -1,0 +1,48 @@
+{
+  "name": "lazarus-failover",
+  "version": "0.1.0",
+  "description": "Lightweight heartbeat failover. Your service, risen.",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "lazarus": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "failover",
+    "heartbeat",
+    "high-availability",
+    "deadman-switch",
+    "uptime",
+    "hybrid",
+    "local-cloud"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "dist",
+    "lazarus.example.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "pino": "^9.6.0",
+    "pino-pretty": "^13.0.0",
+    "yaml": "^2.8.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.0.18"
+  }
+}

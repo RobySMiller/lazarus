@@ -1,0 +1,25 @@
+# lazarus.yml — Your service, risen.
+# See https://github.com/robysmiller/lazarus for docs.
+
+role: standby              # "primary" or "standby"
+
+heartbeat:
+  interval: 10000          # ms between heartbeats (primary sends)
+  timeout: 30000           # ms before primary is considered dead
+  port: 8089               # port standby listens on
+  # target: "https://standby.example.com"  # URL primary sends heartbeats to
+
+service:
+  command: "node server.js" # Lazarus manages this process
+
+  # OR use hooks instead of command:
+  # hooks:
+  #   on_primary_down: "systemctl start myapp"
+  #   on_primary_up: "systemctl stop myapp"
+
+standby:
+  mode: cold               # "cold" (start on failover) or "warm" (always running)
+  signal: SIGHUP           # signal to send warm-standby process on role change
+
+# secret: "${LAZARUS_SECRET}"  # shared secret for auth (env var interpolation)
+# log_level: info
