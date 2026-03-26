@@ -1,5 +1,10 @@
 # Lazarus
 
+[![npm version](https://img.shields.io/npm/v/lazarus.svg)](https://www.npmjs.com/package/lazarus)
+[![CI](https://github.com/RobySMiller/lazarus/actions/workflows/ci.yml/badge.svg)](https://github.com/RobySMiller/lazarus/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org/)
+
 > Your service, risen.
 
 **Your AI never sleeps, even when your laptop does.**
@@ -46,7 +51,7 @@ Your Laptop (primary)                Cloud (standby)
 ## Quick Start
 
 ```bash
-npm i -g lazarus-failover
+npm i -g lazarus
 ```
 
 **On your local machine (primary):**
@@ -227,7 +232,7 @@ lazarus standby --port 8089 --command "docker start myapp"
 services:
   standby:
     image: node:20
-    command: npx lazarus-failover standby --port 8089 --command "node server.js"
+    command: npx lazarus standby --port 8089 --command "node server.js"
     ports:
       - "8089:8089"
     environment:

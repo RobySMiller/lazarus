@@ -1,12 +1,21 @@
 {
-  "name": "lazarus-failover",
+  "name": "lazarus",
   "version": "0.1.0",
-  "description": "Lightweight heartbeat failover. Your service, risen.",
+  "description": "Lightweight heartbeat failover for hybrid local/cloud operation. Your service, risen.",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
     "lazarus": "./dist/index.js"
   },
+  "homepage": "https://robysmiller.github.io/lazarus",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/RobySMiller/lazarus.git"
+  },
+  "bugs": {
+    "url": "https://github.com/RobySMiller/lazarus/issues"
+  },
+  "author": "Roby Miller",
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
@@ -21,6 +30,9 @@
     "high-availability",
     "deadman-switch",
     "uptime",
+    "local-first",
+    "ai-agent",
+    "devops",
     "hybrid",
     "local-cloud"
   ],

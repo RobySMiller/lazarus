@@ -78,7 +78,10 @@ export async function run(argv: string[]): Promise<void> {
   }
 
   if (values.version) {
-    console.log('lazarus 0.1.0');
+    const { createRequire } = await import('node:module');
+    const require = createRequire(import.meta.url);
+    const pkg = require('../package.json');
+    console.log(`lazarus ${pkg.version}`);
     return;
   }
 
