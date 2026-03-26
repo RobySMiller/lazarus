@@ -1,28 +1,24 @@
 import http from 'node:http';
 
 import { logger } from '../logger.js';
+import { FailoverStateMachine, type StateMachineConfig } from '../state-machine.js';
 import type { HeartbeatStatus } from './types.js';
 
-let lastHeartbeat = 0;
+const CHECK_INTERVAL = 5_000;
 let stateCheckTimer: NodeJS.Timeout | null = null;
-let wasPrimaryAlive = false;
+let stateMachine: FailoverStateMachine | null = null;
 const startTime = Date.now();
-
-export function isPrimaryAlive(timeoutMs: number): boolean {
-  return lastHeartbeat > 0 && Date.now() - lastHeartbeat < timeoutMs;
-}
 
 export function startHeartbeatReceiver(
   port: number,
-  timeoutMs: number,
-  onPrimaryAlive: () => void,
-  onPrimaryDead: () => void,
+  smConfig: StateMachineConfig,
+  onFailover: () => void,
+  onYield: () => void,
   secret?: string,
 ): http.Server {
-  const CHECK_INTERVAL = 5_000;
+  stateMachine = new FailoverStateMachine(smConfig, onFailover, onYield);
 
   const server = http.createServer((req, res) => {
-    // POST /heartbeat — receive heartbeat from primary
     if (req.method === 'POST' && req.url === '/heartbeat') {
       if (secret) {
         const auth = req.headers['authorization'];
@@ -36,7 +32,7 @@ export function startHeartbeatReceiver(
       let body = '';
       req.on('data', (chunk) => (body += chunk));
       req.on('end', () => {
-        lastHeartbeat = Date.now();
+        stateMachine!.heartbeat();
         logger.debug('Heartbeat received');
         res.writeHead(200, { 'Content-Type': 'text/plain' });
         res.end('ok');
@@ -44,12 +40,13 @@ export function startHeartbeatReceiver(
       return;
     }
 
-    // GET /health or GET / — status endpoint
     if (req.method === 'GET' && (req.url === '/health' || req.url === '/')) {
+      const sm = stateMachine!;
       const status: HeartbeatStatus = {
         status: 'ok',
-        primaryAlive: isPrimaryAlive(timeoutMs),
-        lastHeartbeat: lastHeartbeat || null,
+        state: sm.state,
+        primaryAlive: sm.state === 'HEALTHY' || sm.state === 'RECOVERING',
+        lastHeartbeat: sm.lastHeartbeat || null,
         uptime: Math.floor((Date.now() - startTime) / 1000),
         role: 'standby',
       };
@@ -66,21 +63,20 @@ export function startHeartbeatReceiver(
     logger.info({ port }, 'Heartbeat receiver listening');
   });
 
-  // Poll for state transitions
   stateCheckTimer = setInterval(() => {
-    const alive = isPrimaryAlive(timeoutMs);
-    if (alive && !wasPrimaryAlive) {
-      logger.info('Primary came online — yielding');
-      wasPrimaryAlive = true;
-      onPrimaryAlive();
-    } else if (!alive && wasPrimaryAlive) {
-      logger.info('Primary went offline — taking over');
-      wasPrimaryAlive = false;
-      onPrimaryDead();
+    const prevState = stateMachine!.state;
+    stateMachine!.check();
+    const newState = stateMachine!.state;
+    if (prevState !== newState) {
+      logger.info({ from: prevState, to: newState }, 'State transition');
     }
   }, CHECK_INTERVAL);
 
   return server;
+}
+
+export function getStateMachine(): FailoverStateMachine | null {
+  return stateMachine;
 }
 
 export function stopHeartbeatReceiver(): void {

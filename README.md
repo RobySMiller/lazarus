@@ -9,7 +9,7 @@
 
 **Your AI never sleeps, even when your laptop does.**
 
-Close your laptop, lose WiFi, or let your Mac sleep — your AI agent, bot, or service keeps running. Lazarus is a lightweight heartbeat failover that keeps a cloud standby ready. When your local machine goes dark, the cloud takes over in 30 seconds. When you come back, it yields. Seamlessly.
+Close your laptop, lose WiFi, or let your Mac sleep — your AI agent, bot, or service keeps running. Lazarus is a lightweight heartbeat failover that keeps a cloud standby ready. When your local machine goes dark, the cloud detects it and starts your service. When you come back, it yields.
 
 Born from running AI agents locally. We got tired of our assistant going offline every time we closed a lid.
 
@@ -68,7 +68,7 @@ lazarus standby \
   --command "node my-agent.js"
 ```
 
-That's it. If your machine goes offline for 30 seconds, the cloud starts your service. When you come back, it stops.
+That's it. If your machine goes offline, the cloud detects the missing heartbeats and starts your service. When you come back, it yields. The failover window is configurable (default: 3 missed checks over 30 seconds).
 
 ## Why
 
@@ -80,12 +80,13 @@ Lazarus is one thing done well: heartbeat-based failover in ~400 lines of TypeSc
 
 ## How it works
 
-1. **Primary** sends an HTTP heartbeat to the standby every 10 seconds
-2. **Standby** listens. As long as heartbeats arrive, it stays idle
-3. If **30 seconds** pass with no heartbeat, the standby starts your service
-4. When the primary comes back and heartbeats resume, the standby stops the service and yields
+1. **Primary** sends an HTTP heartbeat to the standby every 10 seconds (configurable)
+2. **Standby** listens and tracks primary state through a 5-state machine: `UNKNOWN → HEALTHY → SUSPECT → FAILED → RECOVERING`
+3. If heartbeats stop, the standby enters `SUSPECT`, then after `failoverThreshold` consecutive misses (default: 3), transitions to `FAILED` and starts your service
+4. When heartbeats resume, the standby enters `RECOVERING` and waits for `recoveryThreshold` consecutive heartbeats (default: 3) before yielding back — preventing flapping on unstable connections
+5. If the primary's managed service crashes, heartbeats pause automatically so the standby can take over
 
-No leader election. No consensus protocol. No distributed state. Just a deadman's switch.
+No leader election. No consensus protocol. No distributed state. Just a deadman's switch with flap protection.
 
 ## Configuration
 
@@ -107,9 +108,16 @@ heartbeat:
   timeout: 30000           # ms before primary is declared dead
   port: 8089               # standby listens on this port
   target: "https://standby.example.com"
+  failoverThreshold: 3     # consecutive missed checks before failover
+  recoveryThreshold: 3     # consecutive alive checks before yielding back
 
 service:
   command: "node server.js"
+  # healthcheck:           # optional — pause heartbeats if service is unhealthy
+  #   url: "http://localhost:3000/health"
+  #   interval: 15000
+  #   timeout: 5000
+  #   unhealthyThreshold: 3
 
 standby:
   mode: cold               # "cold" or "warm"
@@ -157,12 +165,11 @@ Service is not running until failover. Uses zero resources until needed.
 
 ### Warm standby
 
-Service is always running but knows its role via the `LAZARUS_ROLE` environment variable (`standby` or `active`). On failover, Lazarus sends a configurable signal (default: `SIGHUP`) so your service can start accepting traffic.
+Service is always running but knows its role via the `LAZARUS_ROLE` environment variable (`standby` or `active`). On failover, Lazarus sends `SIGUSR1` to promote your service to active. When the primary returns, it sends `SIGUSR2` to demote back to standby.
 
 ```yaml
 standby:
   mode: warm
-  signal: SIGHUP
 ```
 
 ## Security
@@ -199,6 +206,7 @@ curl https://standby.example.com:8089/health
 ```json
 {
   "status": "ok",
+  "state": "HEALTHY",
   "primaryAlive": true,
   "lastHeartbeat": 1711324567890,
   "uptime": 3600,
@@ -243,7 +251,8 @@ services:
 
 - **Single standby.** v1 supports one primary and one standby. Multi-standby would require leader election — a different tool.
 - **No state replication.** Lazarus coordinates processes, not data. Use a shared database, S3, or mounted volume for state.
-- **Brief split-brain window.** When the primary returns, there's a ~5 second window where both could be running. Design your service to be idempotent.
+- **Failover is not instant.** With defaults (10s interval, 30s timeout, 3 missed checks), failover takes ~30-40 seconds. Tune thresholds for faster detection at the risk of false positives.
+- **Brief split-brain window.** When the primary returns, there's a short window where both could be running while `recoveryThreshold` heartbeats are confirmed. Design your service to be idempotent.
 
 ## License
 

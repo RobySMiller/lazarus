@@ -28,6 +28,8 @@ describe('loadConfig', () => {
     expect(config.heartbeat.interval).toBe(10_000);
     expect(config.heartbeat.timeout).toBe(30_000);
     expect(config.heartbeat.port).toBe(8089);
+    expect(config.heartbeat.failoverThreshold).toBe(3);
+    expect(config.heartbeat.recoveryThreshold).toBe(3);
     expect(config.standby.mode).toBe('cold');
   });
 
@@ -38,12 +40,16 @@ heartbeat:
   interval: 5000
   timeout: 15000
   target: "https://example.com"
+  failoverThreshold: 5
+  recoveryThreshold: 5
 `);
     const config = loadConfig(TEST_CONFIG);
     expect(config.role).toBe('primary');
     expect(config.heartbeat.interval).toBe(5000);
     expect(config.heartbeat.timeout).toBe(15000);
     expect(config.heartbeat.target).toBe('https://example.com');
+    expect(config.heartbeat.failoverThreshold).toBe(5);
+    expect(config.heartbeat.recoveryThreshold).toBe(5);
   });
 
   it('env vars override YAML', () => {
@@ -103,15 +109,33 @@ service:
     expect(config.service?.hooks?.on_primary_up).toBe('echo up');
   });
 
+  it('loads healthcheck from YAML', () => {
+    fs.writeFileSync(TEST_CONFIG, `
+role: primary
+heartbeat:
+  target: "https://example.com"
+service:
+  command: "node app.js"
+  healthcheck:
+    url: "http://localhost:3000/health"
+    interval: 10000
+    timeout: 3000
+    unhealthyThreshold: 5
+`);
+    const config = loadConfig(TEST_CONFIG);
+    expect(config.service?.healthcheck?.url).toBe('http://localhost:3000/health');
+    expect(config.service?.healthcheck?.interval).toBe(10000);
+    expect(config.service?.healthcheck?.timeout).toBe(3000);
+    expect(config.service?.healthcheck?.unhealthyThreshold).toBe(5);
+  });
+
   it('supports warm standby mode', () => {
     fs.writeFileSync(TEST_CONFIG, `
 role: standby
 standby:
   mode: warm
-  signal: SIGUSR1
 `);
     const config = loadConfig(TEST_CONFIG, { role: 'standby' });
     expect(config.standby.mode).toBe('warm');
-    expect(config.standby.signal).toBe('SIGUSR1');
   });
 });

@@ -1,9 +1,10 @@
 import { parseArgs } from 'node:util';
 
-import { loadConfig, type LazarusConfig } from './config.js';
-import { startHeartbeatSender, stopHeartbeatSender } from './heartbeat/sender.js';
+import { loadConfig } from './config.js';
+import { startHeartbeatSender, stopHeartbeatSender, pauseHeartbeats, resumeHeartbeats } from './heartbeat/sender.js';
 import { startHeartbeatReceiver, stopHeartbeatReceiver } from './heartbeat/receiver.js';
-import { startProcess, stopProcess } from './process/manager.js';
+import { startProcess, stopProcess, signalProcess, isProcessRunning } from './process/manager.js';
+import { startHealthCheck, stopHealthCheck, isServiceHealthy } from './health-check.js';
 import { runHook } from './hooks.js';
 import { logger } from './logger.js';
 
@@ -132,22 +133,58 @@ async function runPrimary(configPath?: string, overrides?: Record<string, unknow
     interval: config.heartbeat.interval,
   }, 'Starting as PRIMARY');
 
+  let serviceRunning = true;
+
   // Start the service if configured
   if (config.service?.command) {
     startProcess({
       command: config.service.command,
       role: 'primary',
       autoRestart: true,
+      onExit: (code, signal) => {
+        // Service crashed — pause heartbeats so standby takes over
+        serviceRunning = false;
+        logger.warn({ code, signal }, 'Service exited — pausing heartbeats');
+        pauseHeartbeats();
+      },
     });
   }
 
-  // Start sending heartbeats
-  startHeartbeatSender(config.heartbeat.target!, config.heartbeat.interval, config.secret);
+  // Health check gates heartbeats on service liveness beyond just "is the process running"
+  if (config.service?.healthcheck) {
+    startHealthCheck(
+      config.service.healthcheck,
+      () => pauseHeartbeats(),   // unhealthy → stop heartbeating
+      () => resumeHeartbeats(),  // healthy again → resume
+    );
+  }
 
-  // Graceful shutdown
+  // Start sending heartbeats, gated on service health
+  const healthGate = config.service?.command
+    ? () => serviceRunning && (!config.service?.healthcheck || isServiceHealthy())
+    : undefined;
+
+  startHeartbeatSender(config.heartbeat.target!, config.heartbeat.interval, config.secret, healthGate);
+
+  // Track restarts — resume heartbeats when service is back
+  if (config.service?.command) {
+    const origOnExit = config.service.command;
+    // Patch: when auto-restart brings process back, resume heartbeats
+    const checkRestart = setInterval(() => {
+      if (!serviceRunning && isProcessRunning()) {
+        serviceRunning = true;
+        logger.info('Service restarted — resuming heartbeats');
+        resumeHeartbeats();
+      }
+    }, 1000);
+
+    process.on('exit', () => clearInterval(checkRestart));
+  }
+
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
     stopHeartbeatSender();
+    stopHealthCheck();
     await stopProcess();
     process.exit(0);
   };
@@ -162,6 +199,8 @@ async function runStandby(configPath?: string, overrides?: Record<string, unknow
     port: config.heartbeat.port,
     timeout: config.heartbeat.timeout,
     mode: config.standby.mode,
+    failoverThreshold: config.heartbeat.failoverThreshold,
+    recoveryThreshold: config.heartbeat.recoveryThreshold,
   }, 'Starting as STANDBY');
 
   // Warm standby: start process immediately in standby role
@@ -173,16 +212,15 @@ async function runStandby(configPath?: string, overrides?: Record<string, unknow
     });
   }
 
-  const handlePrimaryDead = async () => {
+  const handleFailover = async () => {
     logger.warn('PRIMARY IS DOWN — LAZARUS RISES');
 
     if (config.service?.command) {
       if (config.standby.mode === 'cold') {
         startProcess({ command: config.service.command, role: 'active', autoRestart: true });
       } else {
-        // Warm: signal the already-running process
-        const { signalProcess } = await import('./process/manager.js');
-        signalProcess(config.standby.signal as NodeJS.Signals);
+        // Warm: promote — SIGUSR1 means "you're active now"
+        signalProcess('SIGUSR1');
       }
     }
 
@@ -191,15 +229,15 @@ async function runStandby(configPath?: string, overrides?: Record<string, unknow
     }
   };
 
-  const handlePrimaryAlive = async () => {
-    logger.info('Primary is back — yielding');
+  const handleYield = async () => {
+    logger.info('Primary is stable — yielding');
 
     if (config.service?.command) {
       if (config.standby.mode === 'cold') {
         await stopProcess();
       } else {
-        const { signalProcess } = await import('./process/manager.js');
-        signalProcess(config.standby.signal as NodeJS.Signals);
+        // Warm: demote — SIGUSR2 means "yield back to standby"
+        signalProcess('SIGUSR2');
       }
     }
 
@@ -210,13 +248,16 @@ async function runStandby(configPath?: string, overrides?: Record<string, unknow
 
   const server = startHeartbeatReceiver(
     config.heartbeat.port,
-    config.heartbeat.timeout,
-    handlePrimaryAlive,
-    handlePrimaryDead,
+    {
+      timeoutMs: config.heartbeat.timeout,
+      failoverThreshold: config.heartbeat.failoverThreshold,
+      recoveryThreshold: config.heartbeat.recoveryThreshold,
+    },
+    handleFailover,
+    handleYield,
     config.secret,
   );
 
-  // Graceful shutdown
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
     stopHeartbeatReceiver();
@@ -286,7 +327,7 @@ async function runInit(): Promise<void> {
   }
 
   const template = `# lazarus.yml — Your service, risen.
-# See https://github.com/robysmiller/lazarus for docs.
+# See https://github.com/RobySMiller/lazarus for docs.
 
 role: standby              # "primary" or "standby"
 
@@ -294,10 +335,19 @@ heartbeat:
   interval: 10000          # ms between heartbeats (primary sends)
   timeout: 30000           # ms before primary is considered dead
   port: 8089               # port standby listens on
+  failoverThreshold: 3     # consecutive missed checks before failover
+  recoveryThreshold: 3     # consecutive alive checks before yielding back
   # target: "https://standby.example.com"  # URL primary sends heartbeats to
 
 service:
   command: "node server.js" # Lazarus manages this process
+
+  # Optional health check — heartbeats stop if this fails
+  # healthcheck:
+  #   url: "http://localhost:3000/health"  # or use command: "curl -f ..."
+  #   interval: 15000
+  #   timeout: 5000
+  #   unhealthyThreshold: 3
 
   # OR use hooks instead of command:
   # hooks:
@@ -306,7 +356,6 @@ service:
 
 standby:
   mode: cold               # "cold" (start on failover) or "warm" (always running)
-  signal: SIGHUP           # signal to send warm-standby process on role change
 
 # secret: "\${LAZARUS_SECRET}"  # shared secret for auth (env var interpolation)
 # log_level: info

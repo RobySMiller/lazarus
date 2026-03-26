@@ -8,10 +8,11 @@ export interface ProcessManagerOptions {
   command: string;
   role: 'primary' | 'standby' | 'active';
   autoRestart?: boolean;
+  onExit?: (code: number | null, signal: string | null) => void;
 }
 
 let child: ChildProcess | null = null;
-let currentCommand: string | null = null;
+let currentOpts: ProcessManagerOptions | null = null;
 let shouldRestart = false;
 
 export function startProcess(opts: ProcessManagerOptions): void {
@@ -20,7 +21,7 @@ export function startProcess(opts: ProcessManagerOptions): void {
     return;
   }
 
-  currentCommand = opts.command;
+  currentOpts = opts;
   shouldRestart = opts.autoRestart ?? false;
 
   const env = { ...process.env, LAZARUS_ROLE: opts.role };
@@ -48,7 +49,13 @@ export function startProcess(opts: ProcessManagerOptions): void {
   child.on('exit', (code, signal) => {
     logger.info({ code, signal }, 'Service process exited');
     child = null;
-    if (shouldRestart && currentCommand) {
+
+    // Notify caller that the process died
+    if (opts.onExit) {
+      opts.onExit(code, signal);
+    }
+
+    if (shouldRestart && currentOpts) {
       logger.info('Auto-restarting service...');
       setTimeout(() => startProcess(opts), 1000);
     }

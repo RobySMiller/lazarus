@@ -1,3 +1,5 @@
+import type { State } from '../state-machine.js';
+
 export interface HeartbeatPayload {
   timestamp: number;
   hostname: string;
@@ -6,6 +8,7 @@ export interface HeartbeatPayload {
 
 export interface HeartbeatStatus {
   status: 'ok';
+  state: State;
   primaryAlive: boolean;
   lastHeartbeat: number | null;
   uptime: number;

@@ -3,6 +3,14 @@ import path from 'node:path';
 
 import YAML from 'yaml';
 
+export interface HealthCheckConfig {
+  url?: string;
+  command?: string;
+  interval: number;
+  timeout: number;
+  unhealthyThreshold: number;
+}
+
 export interface LazarusConfig {
   role: 'primary' | 'standby';
   heartbeat: {
@@ -10,9 +18,12 @@ export interface LazarusConfig {
     timeout: number;
     port: number;
     target?: string;
+    failoverThreshold: number;
+    recoveryThreshold: number;
   };
   service?: {
     command?: string;
+    healthcheck?: HealthCheckConfig;
     hooks?: {
       on_primary_down?: string;
       on_primary_up?: string;
@@ -20,7 +31,6 @@ export interface LazarusConfig {
   };
   standby: {
     mode: 'cold' | 'warm';
-    signal: string;
   };
   secret?: string;
   logLevel: string;
@@ -32,11 +42,12 @@ const DEFAULTS: LazarusConfig = {
     interval: 10_000,
     timeout: 30_000,
     port: 8089,
+    failoverThreshold: 3,
+    recoveryThreshold: 3,
   },
   service: undefined,
   standby: {
     mode: 'cold',
-    signal: 'SIGHUP',
   },
   logLevel: 'info',
 };
@@ -72,9 +83,10 @@ export function loadConfig(
     onPrimaryUp: string;
     logLevel: string;
     standbyMode: string;
+    failoverThreshold: number;
+    recoveryThreshold: number;
   }>,
 ): LazarusConfig {
-  // Start with defaults
   const config: LazarusConfig = structuredClone(DEFAULTS);
 
   // Layer 2: YAML file
@@ -108,6 +120,8 @@ export function loadConfig(
     if (cliOverrides.secret) config.secret = cliOverrides.secret;
     if (cliOverrides.logLevel) config.logLevel = cliOverrides.logLevel;
     if (cliOverrides.standbyMode) config.standby.mode = cliOverrides.standbyMode as 'cold' | 'warm';
+    if (cliOverrides.failoverThreshold) config.heartbeat.failoverThreshold = cliOverrides.failoverThreshold;
+    if (cliOverrides.recoveryThreshold) config.heartbeat.recoveryThreshold = cliOverrides.recoveryThreshold;
     if (cliOverrides.command) {
       config.service = config.service || {};
       config.service.command = cliOverrides.command;
@@ -142,12 +156,26 @@ function mergeYaml(config: LazarusConfig, parsed: Record<string, unknown>): void
     if (hb.timeout) config.heartbeat.timeout = hb.timeout as number;
     if (hb.port) config.heartbeat.port = hb.port as number;
     if (hb.target) config.heartbeat.target = hb.target as string;
+    if (hb.failoverThreshold) config.heartbeat.failoverThreshold = hb.failoverThreshold as number;
+    if (hb.recoveryThreshold) config.heartbeat.recoveryThreshold = hb.recoveryThreshold as number;
   }
 
   const svc = parsed.service as Record<string, unknown> | undefined;
   if (svc) {
     config.service = config.service || {};
     if (svc.command) config.service.command = svc.command as string;
+
+    const hc = svc.healthcheck as Record<string, unknown> | undefined;
+    if (hc) {
+      config.service.healthcheck = {
+        url: hc.url as string | undefined,
+        command: hc.command as string | undefined,
+        interval: (hc.interval as number) ?? 15_000,
+        timeout: (hc.timeout as number) ?? 5_000,
+        unhealthyThreshold: (hc.unhealthyThreshold as number) ?? 3,
+      };
+    }
+
     const hooks = svc.hooks as Record<string, string> | undefined;
     if (hooks) {
       config.service.hooks = {
@@ -160,6 +188,5 @@ function mergeYaml(config: LazarusConfig, parsed: Record<string, unknown>): void
   const sb = parsed.standby as Record<string, unknown> | undefined;
   if (sb) {
     if (sb.mode) config.standby.mode = sb.mode as 'cold' | 'warm';
-    if (sb.signal) config.standby.signal = sb.signal as string;
   }
 }
